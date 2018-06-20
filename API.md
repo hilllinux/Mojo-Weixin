@@ -8,6 +8,7 @@
 |[/openwx/get_user_info](API.md#获取用户数据)      |running |获取登录用户数据 |
 |[/openwx/get_friend_info](API.md#获取好友数据)  |running |获取好友数据 |
 |[/openwx/get_group_info](API.md#获取群组数据)       |running |获取群组数据 |
+|[/openwx/get_group_basic_info](API.md#获取群组基本数据)       |running |获取群组基本数据 |
 |[/openwx/get_avatar](API.md#获取用户或群组头像)          |running |获取用户或群组头像|
 |数据搜索相关                  |        |                |
 |[/openwx/search_friend](API.md#搜索好友对象)        |running |搜索好友对象|
@@ -20,9 +21,11 @@
 |[/openwx/kick_group_member](API.md#移除群组成员)    |running |移除群组成员|
 |[/openwx/set_markname](API.md#修改好友或群成员备注名称)         |running |修改好友或群成员备注名称|
 |[/openwx/stick](API.md#设置或取消聊天置顶)                |running |设置或取消群组、好友置顶|
+|[/openwx/accept_friend_request](API.md#接受好友验证申请)                |running |接受好友验证申请|
 |发送消息相关                  |        |                |
 |[/openwx/send_friend_message](API.md#发送好友消息)  |running |发送好友消息     |
 |[/openwx/send_group_message](API.md#发送群组消息)   |running |发送群组消息     |
+|[/openwx/revoke_message](API.md#撤回消息)   |running |撤回消息     |
 |[/openwx/upload_media](API.md#上传媒体文件)         |running |上传媒体文件，获取media_id, 用于稍后发送     |
 |[/openwx/consult](API.md#好友问答)              |running  |发送消息给好友并返回好友的回复<br>主要用途是转发微软小冰的智能回复|
 |事件（消息）获取相关 |                    |         |
@@ -296,12 +299,22 @@ API是通过加载`Openwx插件`的形式提供的，上述代码保存成 xxxx.
     },
 ]
 ```
+
+### 获取群组基本数据
+|   API  |获取群组基本数据（不包含群成员）
+|--------|:------------------------------------------|
+|uri     |/openwx/get_group_basic_info|
+|请求方法|GET\|POST|
+|请求参数|无|
+|调用示例|http://127.0.0.1:3000/openwx/get_group_basic_info|
+
+
 ### 发送好友消息
 |   API  |发送好友消息
 |--------|:------------------------------------------|
 |uri     |/openwx/send_friend_message|
 |请求方法|GET\|POST|
-|请求参数|**id**: 好友的id<br>**account**: 好友的帐号<br>**displayname**: 好友显示名称<br>**markname**: 好友备注名称<br>**content**:发送的文本内容(中文需要做urlencode)<br>**media_id**:媒体id(发送媒体消息返回的媒体id，需要做urlencode)<br>**media_path**:媒体路径(可以是文件路径或url，需要做urlencode)|
+|请求参数|**id**: 好友的id<br>**account**: 好友的帐号<br>**displayname**: 好友显示名称<br>**markname**: 好友备注名称<br>**content**:发送的文本内容(中文需要做urlencode)<br>**media_id**:媒体id(发送媒体消息返回的媒体id，需要做urlencode)<br>**media_path**:媒体路径(可以是文件路径或url，需要做urlencode)<br>**async**: 0或1,可选,是否异步发送消息|
 |数据格式|application/x-www-form-urlencoded|
 |调用示例|http://127.0.0.1:3000/openwx/send_friend_message?id=xxxx&content=hello<br>http://127.0.0.1:3000/openwx/send_friend_message?markname=xxx&content=%e4%bd%a0%e5%a5%bd<br>http://127.0.0.1:3000/openwx/send_friend_message?id=xxx&media_path=https%3a%2f%2fss0.bdstatic.com%2flogo.png<br>http://127.0.0.1:3000/openwx/send_friend_message?id=xxx&media_id=%40crypt_1eb0ba44_cb3de736e6ccd5ae8%3a3|
 特殊处理：id=@all 表示群发消息给所有的好友
@@ -316,12 +329,16 @@ API是通过加载`Openwx插件`的形式提供的，上述代码保存成 xxxx.
 ```
 注意：相同媒体消息转发给多个好友或群组时，可以直接拿之前发送消息返回的media_id作为发送对象，这样可以避免重复上传文件，提高发送效率
 
+如果不关心发送消息是否成功，可以采用异步发送的方式，调用接口马上返回:
+
+```http://127.0.0.1:3000/openwx/send_group_message?id=xxxx&content=hello&async=1```
+
 ### 发送群组消息
 |   API  |发送群组消息
 |--------|:------------------------------------------|
 |uri     |/openwx/send_group_message|
 |请求方法|GET\|POST|
-|请求参数|**id**: 群组的id<br>**displayname**: 群组显示名称<br>**content**:发送的文本内容(中文需要做urlencode)<br>**media_id**:媒体id(发送媒体消息返回的媒体id，需要做urlencode)<br>**media_path**:媒体路径(可以是文件路径或url，需要做urlencode)|
+|请求参数|**id**: 群组的id<br>**displayname**: 群组显示名称<br>**content**:发送的文本内容(中文需要做urlencode)<br>**media_id**:媒体id(发送媒体消息返回的媒体id，需要做urlencode)<br>**media_path**:媒体路径(可以是文件路径或url，需要做urlencode)<br>**async**: 0或1,可选,是否异步发送消息|
 |数据格式|application/x-www-form-urlencoded|
 |调用示例|http://127.0.0.1:3000/openwx/send_group_message?id=xxxx&content=hello<br>http://127.0.0.1:3000/openwx/send_group_message?displayname=xxx&content=%e4%bd%a0%e5%a5%bd<br>http://127.0.0.1:3000/openwx/send_group_message?id=xxx&media_path=https%3a%2f%2fss0.bdstatic.com%2flogo.png<br>http://127.0.0.1:3000/openwx/send_group_message?displayname=xxx&media_path=https%3a%2f%2fss0.bdstatic.com%2flogo.png<br>http://127.0.0.1:3000/openwx/send_group_message?id=xxx&media_id=%40crypt_1eb0ba44_cb3de736e6ccd5ae8%3a3|
 
@@ -334,6 +351,19 @@ API是通过加载`Openwx插件`的形式提供的，上述代码保存成 xxxx.
 {"status":"发送成功","msg_id":23910327,"media_id":"@crypt_1eb0ba44_cb3de736e6ccd5ae8:3","code":0} #code为 0 表示发送成功
 ```
 注意：相同媒体消息转发给多个好友或群组时，可以直接拿之前发送消息返回的media_id作为发送对象，这样可以避免重复上传文件，提高发送效率
+
+如果不关心发送消息是否成功，可以采用异步发送的方式，调用接口马上返回:
+
+```http://127.0.0.1:3000/openwx/send_group_message?id=xxxx&content=hello&async=1```
+
+### 撤回消息
+|   API  |撤回消息
+|--------|:------------------------------------------|
+|uri     |/openwx/revoke_message|
+|请求方法|GET\|POST|
+|请求参数|**id**: 消息的id|
+|数据格式|application/x-www-form-urlencoded|
+|调用示例|http://127.0.0.1:3000/openwx/revoke_message?id=xxxx|
 
 ### 查询事件消息
 
@@ -359,7 +389,7 @@ API只能工作在非阻塞模式下,功能受限，不如POST上报的方式获
 
 发送消息、接收消息 以及如下一部分事件: 
 
-`new_group`,`new_friend`,`new_group_member`,`lose_group`,`lose_friend`,`lose_group_member`,
+`new_group`,`new_friend`,`new_group_member`,`lose_group`,`lose_friend`,`lose_group_member`,`friend_request`
 
 ```
 * Connected to 127.1 (127.0.0.1) port 3000 (#0)
@@ -388,6 +418,8 @@ API只能工作在非阻塞模式下,功能受限，不如POST上报的方式获
     "receiver_name":"文件传输助手",
     "receiver_uid":"",
     "sender":"小灰",
+    "sender_markname":"xxx",
+    "sender_category":"系统帐号", #系统帐号|公众号|好友
     "time":"1479787946",
     "type":"friend_message"
     }
@@ -421,15 +453,39 @@ API只能工作在非阻塞模式下,功能受限，不如POST上报的方式获
 |数据格式|application/json|
 
 需要加载Openwx插件时通过 `post_api` 参数来指定上报地址:
+
 ```
 $client->load("Openwx",data=>{
     listen => [{host=>xxx,port=>xxx}],           #可选，发送消息api监听端口
     post_api=> 'http://127.0.0.1:3000/post_api', #可选，接收消息或事件的上报地址
-    post_event => 1,                             #可选，是否上报事件，为了向后兼容性，默认值为0
+    post_event => 1,                             #可选，是否上报事件，为了向后兼容性，默认值为1
+    post_stdout => 0,                            #可选，上报数据是否打印到stdout，适合管道交互信息方式，默认0
     post_media_data => 1,                        #可选，是否上报经过base64编码的图片原始数据，默认值为1
     post_event_list => ['login','stop','state_change','input_qrcode'], #可选，上报事件列表
 });
 ```
+
+首先要了解消息一些关键属性信息：
+
+上报或拉取的JSON数据的类型中的`post_type`属性用于区分上报的数据是消息类的数据还是其他事件
+
+|关键属性     |取值             |说明                  | 
+|:-----------|:----------------|:---------------------|
+|post_type   |receive_message<br>send_message<br>event|接收消息<br>发送消息<br>其他事件|
+
+发送接收消息（`post_type`为`receive_message`或`send_message`时)的关键属性信息：
+
+|关键属性     |取值           |说明                           | 
+|:-----------|:--------------|:------------------------------|
+|id          |-|消息的id
+|type        |friend_message<br>group_message<br>group_notice|消息类型细分:<br>好友消息<br>群消息<br>群提示消息  |
+|class       |send<br>recv|表明是发送消息还是接收消息
+|format      |text<br>media<br>app<br>revoke<br>card|消息的格式：<br>文本消息<br>媒体（图片、视频、语音）<br>应用分享<br>撤回消息<br>名片分享|
+|sender_id   |-|消息发送者id（注意不是所有的消息类型都存在这个属性）
+|receiver_id |-|消息接收者id（注意不是所有的消息类型都存在这个属性）
+|group_id    |-|消息相关的群组id（注意不是所有的消息类型都存在这个属性）
+
+
 #### 接收消息上报 
 
 当接收到消息时，会把消息通过JSON格式数据POST到该接口
@@ -467,7 +523,7 @@ Content-Type: application/json
 
 ```
 
-群提示消息上报
+#### 群提示消息上报
 
 ```
 connect to 127.0.0.1 port 3000
@@ -592,6 +648,52 @@ Content-Type: application/json
 }
 
 ```
+#### 撤回消息上报
+
+```
+{
+    "time":"1442542632",
+    "content":"[撤回消息](你撤回了一条消息)",
+    "revoke_id":"2513410439052032973", #被用户撤回的消息id
+    "class":"send",
+    "sender_id":"@2372835507",
+    "sender_uid": 123456,
+    "group":"PERL学习交流",
+    "group_id":"@@2617047292",
+    "group_uid": 123456,
+    "group_name": "PERL学习交流",
+    "sender":"灰灰",
+    "sender_name": "灰灰",
+    "id":"10856",
+    "uid": 123456,
+    "type":"group_message",
+    "format": "revoke",
+    "post_type": "send_message"
+}
+
+```
+
+### 名片消息上报
+
+```
+{
+    'card_avatar' => 'http://wx.qlogo.cn/mmhead/ver_1/k99g2RHrEeib9KMhGmXZGSIGDjgnmiaX2acT2wl04so2ibsq8ysVPRkRRNQyRLmUVptBpcHt6lvUZym5JgOSd4fug/0',
+    'card_id' => '@bc9b2967ec91315f4dd47e5e3d0e33ee'
+    'card_account' => '',
+    'card_city' => '中国',
+    'card_province' => '上海',
+    'card_name' => 'xxx',
+    'card_sex' => 'male',
+    'sender_id' => '@b2c5637bb8e158a5a29eca00ac9ed0f9',
+    'receiver_id' => 'filehelper',
+    'id' => '5604497552796809997',
+    'format' => 'card',
+    'type' => 'friend_message',
+    'class' => 'send',
+    'time' => '1482985638',
+}
+
+```
 
 一般情况下，post_api接口返回的响应内容可以是随意，会被忽略，上报完不做其他操作
 如果post_api接口返回的数据类型是 text/json 或者 application/json，并且json格式形式如下:
@@ -626,7 +728,7 @@ Server: Mojolicious (Perl)
 
 |  事件名称                    |事件说明    |上报参数列表
 |------------------------------|:-----------|:-----------------------------------------|
-|login                         |客户端登录  | *1*：表示经过二维码扫描，好友等id可能会发生变化<br>*0*： 表示未经过二维码扫描，好友等id不会发生变化
+|login                         |客户端登录  | *1*：表示经过二维码扫描，好友等id可能会发生变化<br>*0*： 表示未经过二维码扫描，好友等id不会发生变化<br>*-1*：表示登录异常，第二个参数包含异常原因
 |stop                          |客户端停止    | 客户端停止运行，程序退出
 |state_change                  |客户端状态变化|旧的状态，新的状态 （参见[客户端状态说明](https://github.com/sjdy521/Mojo-Weixin/blob/master/Controller-API.md#客户端运行状态介绍)）
 |input_qrcode                  |扫描二维码  | 二维码本地保存路径，二维码原始数据的base64编码
@@ -643,10 +745,11 @@ Server: Mojolicious (Perl)
 |update_user                   |初始化(更新)帐号信息|帐号对象
 |update_friend                 |初始化(更新)好友信息|好友对象列表
 |update_group                  |初始化(更新)群组信息|群组对象列表
+|friend_request                |好友验证申请
 
 可以在Openwx插件中，通过 `post_event_list` 参数来指定上报的事件
 
-默认 `post_event_list => ['login','stop','state_change','input_qrcode','new_group','new_friend','new_group_member','lose_group','lose_friend','lose_group_member']`
+默认 `post_event_list => ['login','stop','state_change','input_qrcode','new_group','new_friend','new_group_member','lose_group','lose_friend','lose_group_member','friend_request']`
 
 需要注意：属性变化类的事件可能触发的会比较频繁，导致产生大量的上报请求，默认不开启
 
@@ -735,20 +838,36 @@ Content-Type: application/json
 
 ```
 
-**可以通过上报的json数组中的`post_type`来区分上报的数据是收到的消息还是其他事件**
+好友验证申请事件
+
+```
+{
+    "post_type":"event",
+    "event":"friend_request",
+    "params":[
+        "@75ab55c416dbe3a", #申请者的id
+        "小灰", #申请者的显示名称
+        "小灰请求加你为好友", #申请者的验证信息
+        "v2_85c00f264eed801fee7@stranger" #接受好友验证申请时需要用到的ticket
+    ]
+}
+
+```
+
+**可以通过上报的json数组中的`post_type`来区分上报的数据是消息还是其他事件**
 
 ### 好友问答
 |   API  |发送消息给好友并等待好友回答
 |--------|:------------------------------------------|
 |uri     |/openwx/consult|
 |请求方法|GET\|POST|
-|请求参数|**id**: 好友的id<br>**account**: 好友的帐号<br>**displayname**: 好友显示名称<br>**markname**: 好友备注名称<br>**timeout**：等待回复的时间，默认30秒<br>**media_path**:媒体路径(可以是文件路径或url，需要做urlencode)|
+|请求参数|**id**: 好友的id<br>**displayname**: 好友显示名称<br>**markname**: 好友备注名称<br>**timeout**：等待回复的时间，默认30秒<br>**media_path**:媒体路径(可以是文件路径或url，需要做urlencode)|
 |数据格式|application/x-www-form-urlencoded|
-|调用示例|http://127.0.0.1:3000/openwx/consult?account=ms-xiaoice&content=haha<br>http://127.0.0.1:3000/openwx/consult?account=ms-xiaoice&media_path=%2ftmp%2fhello.jpg|
+|调用示例|http://127.0.0.1:3000/openwx/consult?displayname=小冰&content=haha<br>http://127.0.0.1:3000/openwx/consult?displayname=%e5%b0%8f%e5%86%b0&media_path=%2ftmp%2fhello.jpg|
 
-主要应用场景是把小冰(微信帐号ms-xiaoice)的智能回复封装成接口，给小冰发好友消息前，你需要先关注小冰的公众号
+主要应用场景是把小冰(中文名称做urlencode: %e5%b0%8f%e5%86%b0)的智能回复封装成接口，给小冰发好友消息前，你需要先关注小冰的公众号
 ```
-GET /openwx/consult?account=ms-xiaoice&content=haha HTTP/1.1
+GET /openwx/consult?displayname=%e5%b0%8f%e5%86%b0&content=haha HTTP/1.1
 User-Agent: curl/7.29.0
 Host: 127.0.0.1:3000
 Accept: */*
@@ -889,9 +1008,9 @@ Server: Mojolicious (Perl)
 |--------|:------------------------------------------|
 |uri     |/openwx/create_group|
 |请求方法|GET\|POST|
-|请求参数|**friend**: 好友的id（多个好友id用逗号分割）<br>**displayname**: 可选，群组的显示名称<br>|
+|请求参数|**friends**: 好友的id（多个好友id用逗号分割）<br>**displayname**: 可选，群组的显示名称<br>|
 |数据格式|application/x-www-form-urlencoded|
-|调用示例|http://127.0.0.1:3000/openwx/create_group?displayname=xxxxxx&friend=xxxx,xxxx|
+|调用示例|http://127.0.0.1:3000/openwx/create_group?displayname=xxxxxx&friends=xxxx,xxxx|
 返回JSON结果:
 
 ```
@@ -907,9 +1026,9 @@ Server: Mojolicious (Perl)
 |--------|:------------------------------------------|
 |uri     |/openwx/invite_friend|
 |请求方法|GET\|POST|
-|请求参数|**friend**: 好友的id（多个好友id用逗号分割）<br>**id**: 群组对象的id<br>**displayname**: 群组的显示名称<br>|
+|请求参数|**friends**: 好友的id（多个好友id用逗号分割）<br>**id**: 群组对象的id<br>**displayname**: 群组的显示名称<br>|
 |数据格式|application/x-www-form-urlencoded|
-|调用示例|http://127.0.0.1:3000/openwx/invite_friend?id=xxxxxx&friend=xxxx,xxxx<br>http://127.0.0.1:3000/openwx/invite_friend?displayname=xxxxxx&friend=xxxx,xxxx|
+|调用示例|http://127.0.0.1:3000/openwx/invite_friend?id=xxxxxx&friends=xxxx,xxxx<br>http://127.0.0.1:3000/openwx/invite_friend?displayname=xxxxxx&friends=xxxx,xxxx|
 返回JSON结果:
 
 ```
@@ -925,9 +1044,9 @@ Server: Mojolicious (Perl)
 |--------|:------------------------------------------|
 |uri     |/openwx/kick_group_member|
 |请求方法|GET\|POST|
-|请求参数|**member**: 成员的id（多个成员id用逗号分割）<br>**id**: 群组的id<br>**displayname**: 群组的显示名称<br>|
+|请求参数|**members**: 成员的id（多个成员id用逗号分割）<br>**id**: 群组的id<br>**displayname**: 群组的显示名称<br>|
 |数据格式|application/x-www-form-urlencoded|
-|调用示例|http://127.0.0.1:3000/openwx/kick_group_member?id=xxxxxx&member=xxxx,xxxx<br>http://127.0.0.1:3000/openwx/kick_group_member?displayname=xxxxxx&member=xxxx,xxxx|
+|调用示例|http://127.0.0.1:3000/openwx/kick_group_member?id=xxxxxx&members=xxxx,xxxx<br>http://127.0.0.1:3000/openwx/kick_group_member?displayname=xxxxxx&members=xxxx,xxxx|
 返回JSON结果:
 
 ```
@@ -1019,13 +1138,13 @@ Server: Mojolicious (Perl)
 
 ### 获取用户或群组头像
 
-|   API  |获取用户或群组头像
+|   API  |获取用户或群组头像
 |--------|:------------------------------------------|
 |uri     |/openwx/get_avatar|
 |请求方法|GET\|POST|
-|请求参数|**id**: 用户或群组的id|
+|请求参数|**id**: 用户或群组的id<br>**group_id**: 群组id（获取群成员头像时需要用到,但群成员因为经常获取不到地址可能导致无法获取头像）|
 |数据格式|image/jpg、image/png|
-|调用示例|http://127.0.0.1:3000/openwx/get_avatar?id=xxxxxx|
+|调用示例|获取好友或群组头像: http://127.0.0.1:3000/openwx/get_avatar?id=xxxxxx<br>获取群成员头像:http://127.0.0.1:3000/openwx/get_avatar?id=xxxxxx&group_id=xxxxx|
 
 返回图片原始数据:
 
@@ -1114,5 +1233,27 @@ Server: Mojolicious (Perl)
     "media_name":"\/tmp\/test.mp4",
     "media_path":"\/tmp\/test.mp4",
     "media_size":66947
+}
+```
+
+### 接受好友验证申请
+
+|   API  |接受好友验证申请
+|--------|:------------------------------------------|
+|uri     |/openwx/accept_friend_request|
+|请求方法|GET\|POST|
+|请求参数|**id**: 申请者id（frient_request事件中会提供）<br>**displayname**：申请者显示名称（frient_request事件中会提供,中文需要urlencode）<br>**ticket**：接受申请需要的ticket（frient_request事件中会提供）|
+|数据格式|application/x-www-form-urlencoded|
+|调用示例|http://127.0.0.1:3000/openwx/accept_friend_request?id=xxx&displayname=%85%c0%0f%2b&ticket=xxx|
+
+返回JSON结果:
+
+```
+{
+    "code": 0,
+    "status": "success",
+    "id": "xxx",
+    "displayname": "xxx",
+    "ticket": "xxx"
 }
 ```

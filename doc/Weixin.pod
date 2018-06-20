@@ -152,10 +152,10 @@ Mojo::Weixin - A Weixin Client Framework base on Mojolicious
     account         #可选，默认值default, 每个客户端的标识，多账号登录时需要设置，用于区分不同客户端保存的cookie路径
     http_debug      #设置该参数，打印调试信息
     keep_cookie     #默认为1，0表示不保存登录cookie，1表示保存登录cookie方便下次直接恢复登录
+    send_interval   #默认为3s，全局发送消息时间间隔，间隔太小会导致消息发送频繁，可能有被封号的风险
 
     log_level       #默认级别为info，可以设置debug|info|warn|error|fatal
     log_path        #默认客户端输出内容打印到STDOUT 设置该参数可以将客户端输出重定向到文件
-    log_unicode     #支持打印unicode字符，默认值为0 不开启
     log_console     #打印到文件的同时也打印到屏幕，方便调试，默认 1
     log_encoding    #输出日志的编码，默认自动检测，如果出现乱码可以尝试手动设置一下输出编码
                     #编码必须是 Encode 模块支持的格式，比如utf8 gbk等
@@ -175,6 +175,9 @@ Mojo::Weixin - A Weixin Client Framework base on Mojolicious
 
     qrcode_count_max #每个二维码都有一个过期时间，过期后会重新下载一个二维码继续等待扫描
                      #如果等待扫码次数超过 qrcode_count_max 客户端会停止运行，默认10次
+
+    is_init_group_member   #是否在客户端初始登录时获取详细的群成员信息（比如account/sex）等，
+                           #默认为0，如果你很在意这些群成员属性，可以设置为1，但可能会极大降低启动速度
 
     #注意：所有参数都支持通过环境变量来设置，参数对应的环境变量格式 MOJO_WEIXIN_{参数名大写}
     #比如: MOJO_WEIXIN_ACCOUNT、 MOJO_WEIXIN_HTTP_DEBUG
@@ -575,6 +578,10 @@ Mojo::Weixin - A Weixin Client Framework base on Mojolicious
     content     #消息内容
     format      #消息格式，包括 text|media|app 三类
 
+    code        #消息发送状态，0发送成功，非0发送失败
+    msg         #消息发送状态，字符串形式："发送成功","发送失败"
+    info        #消息发送状态的附加信息，比如发送失败的原因
+
     sender_id   #群消息中发送对象的id
     receiver_id #消息接收对象的id
     group_id    #群消息的群对象id
@@ -648,11 +655,18 @@ Mojo::Weixin - A Weixin Client Framework base on Mojolicious
         ...;
     });
 
+=head2 before_send_message 消息发送前
+
+    $client->on(before_send_message=>sub{
+        my($client,$msg)= @_;
+        $msg->content(  $msg->content . "——我是一个消息小尾巴"  );
+    });
+
 =head2 send_message 消息发送完成
 
     $client->on(send_message=>sub{
-        my($client,$msg,$status) = @_; #传给回调的参数是发送完毕的 消息对象 和 发送状态对象
-        if($status->is_success){
+        my($client,$msg) = @_; #传给回调的参数是发送完毕的 消息对象 和 发送状态对象
+        if($msg->is_success){
             print "消息" . $msg->id . "发送成功\n";
         }
         else{
@@ -848,22 +862,76 @@ Mojo::Weixin - A Weixin Client Framework base on Mojolicious
 
 =head2 Mojo::Weixin::Plugin::IRCShell
 
-将微信协议转换成irc协议，启动一个本地的irc服务器，使用任意irc客户端（irc user设置为微信帐号）连接后即可以按照irc的方式使用微信
+将微信协议转换成irc协议，启动一个本地的irc服务器，使用任意irc客户端（irc nick设置为微信昵称）连接后即可以按照irc的方式使用微信
 
 需要依赖模块 L<Mojo::IRC::Server::Chinese>
 
     $client->load("IRCShell",data=>{
-        listen=>[ {host=>"127.0.0.1",port=>6667},], #可选，IRC服务器监听的地址+端口，默认0.0.0.0:6667
-        load_friend => 1, #默认是0 是否初始为每个好友生成irc虚拟帐号并加入频道 #我的好友
+        listen=>[ {host=>"0.0.0.0",port=>6667},], #可选，IRC服务器监听的地址+端口，默认0.0.0.0:6667
+        load_friend => 0, #可选，是否初始为每个好友生成irc虚拟帐号并加入频道 #我的好友
     });
     #支持的参数包括：
     listen              #监听的地址和端口，数组的形式来支持多个地址
                         # listen=>[ {host=>"127.0.0.1",port=>6667}, {host=>"127.0.0.1",port=>6668}]
                         # 表示监听127.0.0.1:6667和 127.0.0.1:6668两个端口
-    master_irc_user     #和qq匹配的irc user帐号，默认按照和qq号相同的user或者客户端ip是本机地址作为识别规则
+    allow_group         # allow_group=>["群组1名称","群组2名称",], #可选，允许在irc上创建的微信群名称
+    ban_group           # ban_group=>["群组1名称","群组2名称"],  #可选，禁止在irc上创建的微信群名称
+    master_irc_nick     # 和微信关联的irc客户端昵称，默认按照和微信号相同的昵称或者客户端ip是本机地址作为识别规则
+                        # 用于识别哪个连接到服务器上的irc用户是你自己
+    auto_join_channel   #0|1 默认为1，开启该选项，收到未加入的频道消息会自动加入频道并接收消息，主要为了防止漏收
     load_friend         #0|1 默认是0 是否初始为每个好友生成irc虚拟帐号并加入频道 #我的好友
-    image_api           #兼容elimage图床api地址，将qq图片转为连接，方便在irc上查看图片，默认没有启用
-                        #推荐依云的elimage http://img.vim-cn.com/
+    upload_api          #图床api地址，将图片转为连接，方便在irc上查看图片
+                        #支持兼容 http://img.vim-cn.com/ 的接口，考虑到隐私问题，默认不开启
+    media_dir           #sendFile指令发送文件的默认目录，默认值与 new 中的 media_dir 参数相同
+
+    #以下参数需要 Mojo::IRC::Server::Chinese v1.8.1及以上版本
+
+    #TLS支持
+
+    #代码示例
+    $client->load("IRCShell",data=>{
+        listen=>[ 
+            {host=>"0.0.0.0",port=>6667},         #监听普调端口
+            {host=>"0.0.0.0",port=>6697,tls=>1},  #监听6697端口，开启TLS加密
+        ],
+    });
+
+    #支持的TLS参数：
+    #更多详细参数使用说明参见 https://metacpan.org/pod/Mojo::IOLoop::Server#tls
+    tls                 #0|1 是否启用tls加密
+    tls_ca              #可选，本地ca证书路径 例如 /etc/tls/ca.crt
+    tls_cert            #可选，服务器证书路径，默认会生成一个测试证书
+    tls_ciphers         #可选，加密套件，例如 AES128-GCM-SHA256:RC4:HIGH:!MD5:!aNULL:!EDH
+    tls_key             #可选，服务器证书key文件路径
+    tls_verify          #可选，验证模式
+    tls_version         #可选，协议版本，例如 TLSv1_2
+
+    create_chanserv_user #0|1 默认为1，是否创建频道时自动生成昵称为 ChanServ 的虚拟用户
+                         #主要用于解决频道人数为空时，HexChat等某些客户端/list无法获取到频道信息的问题
+
+    auth                 #登录验证函数，在客户端登录后被执行，返回 1 验证通过，返回 0 验证失败
+
+    代码举例：
+    $client->load("IRCShell",data=>{
+        auth => sub{
+            my($nick,$user,$pass) = @_; #传递给验证函数的三个参数依次是 irc客户端的NICK/USER/PASS
+            if($nick eq '小灰'){#对于昵称"小灰"进行密码验证
+                return 0 if not defined $pass; #没有设置密码，验证失败
+                return 0 if $pass ne '123456'; #设置的密码不是 "123456" 验证失败
+                return 1; #验证成功，允许正常登录
+            }
+            else{return 1;}#对其他登录昵称不进行验证，全部允许登录
+        }
+    });
+
+特殊自定义指令：
+
+    #irc消息中 `sendFile `或者`!!`开头，则发送本地或者来自网络的图片、文件等媒体
+    sendFile /tmp/abc.jpg                 #以绝对路径发送文件
+    sendFile http://example.com/abc.jpg   #以url发送文件，会先把url指定的文件拉取下来
+    !!/tmp/abc.jpg                        #以绝对路径发送文件
+    sendFile ./tmp/abc.jpg                #以相对路径发送文件
+    sendFile abc.jpg                      #没有以 "/" 或者 "." 开头，则以 media_dir 参数指定的目录查找文件
 
 微信好友会默认加入到irc的 '#我的好友' 频道中
 
@@ -987,6 +1055,27 @@ Linux系统下直接打印二维码到终端，作者 hyvinlam L<https://github.
         is_need_at  => 1,           #可选，是否需要艾特我来触发智能回复
         comamnd_on  => "小冰启动",  #可选，启动智能回复的命令，在手机端发送给任何人/群该消息内容即可
         comamnd_off => "小冰停止",  #可选，停止智能回复的命令，在手机端发送给任何人/群该消息内容即可
+        allow_group        => ["PERL学习交流"],    #可选，允许插件的群显示名称
+        ban_group          => ["私人群","测试群"], #可选，禁用该插件的群显示名称
+        allow_group_member => ["王大锤"],          #可选，允许该插件的群成员显示名称
+        ban_group_member   => ["王小二","坏蛋"],   #可选，禁用该插件的群成员显示名称
+        ban_friend         => ["坏蛋","小灰"],     #可选，禁用该插件的好友显示名称
+        allow_friend       => ["可爱"],            #可选，允许该插件的好友显示名称
+        allow_group_reply  => 1,                   #可选，是否允许回复群消息，默认1
+        allow_friend_reply => 1,                   #可选，是否允许回复好友消息，默认1
+    });
+
+=head2 Mojo::Weixin::Plugin::GCM
+
+接收消息通过谷歌提供的GCM接口发送到android手机
+
+    $client->load("GCM",data=>{
+        api_url         => 'https://gcm-http.googleapis.com/gcm/send',#可选
+        api_key         =>'xxx', #需要向谷歌申请
+        registration_ids=>["xxx"],#android设备的注册id
+        allow_group     =>["允许推送消息的群名称1","允许推送消息的群名称2"],
+        ban_group       =>["禁止推送消息的群名称"],
+        is_ban_official =>0, #是否禁止推送公众号消息，默认允许
     });
 
 =head2 Mojo::Weixin::Plugin::SmartReply
@@ -1017,8 +1106,8 @@ Linux系统下直接打印二维码到终端，作者 hyvinlam L<https://github.
 其他更多参数设置
 
     $client->load("KnowledgeBase",data=>{
-        allow_group => ["PERL学习交流"],  #可选，允许插件的群，可以是群名称或群号码
-        ban_group   => ["私人群1","私人群2"], #可选，禁用该插件的群，可以是群名称或群号码
+        allow_group => ["PERL学习交流"],  #可选，允许插件的群名称
+        ban_group   => ["私人群1","私人群2"], #可选，禁用该插件的群名称
         file => './KnowledgeBase.dat', #数据库保存路径
         learn_command  => 'learn',     #自定义学习指令关键字
         delete_command =>'del',      #自定义删除指令关键字
@@ -1065,12 +1154,32 @@ Linux系统下直接打印二维码到终端，作者 hyvinlam L<https://github.
 
 提供HTTP API接口，方便获取客户端帐号、好友、群信息，以及通过接口发送和接收好友消息、群消息、事件信息
 
-    #ata是一个HASH引用
+CPAN文档可能比较旧或者表达的信息不够丰富，请参考github上API相关说明L<https://github.com/sjdy521/Mojo-Weixin/blob/master/API.md>
+
+    #同时支持http/https请求
+    $client->load("Openqq",data=>{
+        listen => [
+            {   host=>"0.0.0.0",
+                port=>5000,                       #监听5000端口的http请求
+            },
+            {
+                host    =>"0.0.0.0",
+                port    =>443,                    #可选，https请求监听端口，默认443
+                tls     =>1,                      #必选，开启https请求支持
+                tls_ca      =>"/etc/tls/ca.crt"       #可选，ca证书路径
+                tls_cert    =>"/etc/tls/server.crt"   #可选，服务器证书路径，默认生成一个测试证书
+                tls_key     =>"/etc/tls/server.key"   #可选，证书对应的key文件，默认生成一个测试key文件
+            },#更多tls参数支持参考 https://metacpan.org/pod/Mojo::IOLoop::Server#tls
+        ],
+    });
+
+    #data是一个HASH引用
     $client->load("Openwx",data=>{
         listen => [ {host=>"127.0.0.1",port=>3000}, ] , #监听的地址和端口，支持多个，默认监听0.0.0.0:3000
         auth   => sub {my($param,$controller) = @_},    #可选，认证回调函数，用于进行请求鉴权
         post_api => 'http://xxxx',                      #可选，你自定义的接收消息上报接口
         post_event => 1,                                #可选，是否上报事件，为了向后兼容性，默认值为0
+        post_stdout => 0,                               #可选，上报数据是否打印到stdout，适合管道交互信息方式，默认0
         post_media_data => 1,                           #可选，是否上报经过base64编码的图片原始数据，默认值为1
         post_event_list => ['login','stop','state_change','input_qrcode'], #可选，上报事件列表
         #poll_api  => 'http://xxxx',                     #可选，从外网调用内网程序的api时需要使用到，默认不启用

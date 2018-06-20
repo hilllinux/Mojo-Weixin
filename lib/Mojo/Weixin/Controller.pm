@@ -1,7 +1,5 @@
 package Mojo::Weixin::Controller;
 use strict;
-use warnings;
-use Carp;
 use Config;
 use File::Spec;
 use Mojo::Weixin::Base 'Mojo::EventEmitter';
@@ -14,6 +12,7 @@ use IO::Socket::IP;
 use Time::HiRes ();
 use Storable qw();
 use POSIX qw();
+use File::Spec ();
 use if $^O eq "MSWin32",'Win32::Process';
 use if $^O eq "MSWin32",'Win32';
 use base qw(Mojo::Weixin::Util Mojo::Weixin::Request);
@@ -29,8 +28,6 @@ has auth     => undef;
 has server =>  sub { Mojo::Weixin::Server->new };
 has listen => sub { [{host=>"0.0.0.0",port=>2000},] };
 
-has keep_cookie => 0;
-has cookie_path => undef;
 has http_debug          => sub{$ENV{MOJO_WEIXIN_CONTROLLER_HTTP_DEBUG} || 0 } ;
 has ua_debug            => sub{$_[0]->http_debug};
 has ua_debug_req_body   => sub{$_[0]->ua_debug};
@@ -39,49 +36,42 @@ has ua_debug_req_body   => sub{$_[0]->ua_debug};
 has ua_debug_res_body   => sub{$_[0]->ua_debug};
 has ua_retry_times          => 5;
 has ua_connect_timeout      => 10;
-has ua_request_timeout      => 35;
-has ua_inactivity_timeout   => 35;
-has ua  => sub {Mojo::UserAgent->new(connect_timeout=>3,inactivity_timeout=>3,request_timeout=>3)};
+has ua_request_timeout      => 120;
+has ua_inactivity_timeout   => 120;
+has ua  => sub {
+    Mojo::UserAgent->new(
+        connect_timeout=>$_[0]->ua_connect_timeout,
+        request_timeout=>$_[0]->ua_request_timeout,
+        inactivity_timeout=>$_[0]->ua_inactivity_timeout,
+    )
+};
 
 has tmpdir              => sub {File::Spec->tmpdir();};
+has keep_cookie         => 0;
+has cookie_path         => sub {File::Spec->catfile($_[0]->tmpdir,join('','mojo_weixin_controller_cookie','.dat'))};
 has pid_path            => sub {File::Spec->catfile($_[0]->tmpdir,join('','mojo_weixin_controller_process','.pid'))};
 has backend_path        => sub {File::Spec->catfile($_[0]->tmpdir,join('','mojo_weixin_controller_backend','.dat'))};
 has template_path        => sub {File::Spec->catfile($_[0]->tmpdir,join('','mojo_weixin_controller_template','.pl'))};
 has check_interval      => 5;
 
-has log_level           => 'info';     #debug|info|warn|error|fatal
+has log_level           => 'info';     #debug|info|msg|warn|error|fatal
 has log_path            => undef;
 has log_encoding        => undef;      #utf8|gbk|...
 has log_head            => "[wxc][$$]";
 has log_console         => 1;
+has disable_color       => 0;
+has max_clients         => 100;
 
 has version             => sub{$Mojo::Weixin::Controller::VERSION};
 
 has log     => sub{
-    my $self = $_[0];
     Mojo::Weixin::Log->new(
         encoding    =>  $_[0]->log_encoding,
         path        =>  $_[0]->log_path,
         level       =>  $_[0]->log_level,
-        console_output => $_[0]->log_console,
-        format      =>  sub{
-            my ($time, $level, @lines) = @_;
-            my $title = "";
-            my $head  = $self->log_head || "";
-            if(ref $lines[0] eq "HASH"){
-                my $opt = shift @lines; 
-                $time = $opt->{"time"} if defined $opt->{"time"};
-                $title = $opt->{"title"} . " " if defined $opt->{"title"};
-                $level  = $opt->{"level"} if defined $opt->{"level"};
-                $head  = $opt->{"head"} if defined $opt->{"head"};
-            }
-            @lines = split /\n/,join "",@lines;
-            my $return = "";
-            $time = $time?POSIX::strftime('[%y/%m/%d %H:%M:%S]',localtime($time)):"";
-            $level = $level?"[$level]":"";
-            for(@lines){$return .= $head . $time . " " . $level . " " . $title . $_ . "\n";}
-            return $return;
-        }
+        head        =>  $_[0]->log_head,
+        disable_color   => $_[0]->disable_color,
+        console_output  => $_[0]->log_console,
     )
 };
 sub new {
@@ -182,18 +172,25 @@ sub clean_pid {
 
 sub kill_process {
     my $self = shift;
+    my $ret = 0;
     if(!$_[0] or $_[0]!~/^\d+$/){
         $self->error("pid无效，无法终止进程");
         return;
     }
-    #if($^O  eq "MSWin32"){
+    if($^O  eq "MSWin32"){
     #    my $exitcode = 0;
     #    Win32::Process::KillProcess($_[0],$exitcode);
     #    return $exitcode;
-    #}
-    #else{ 
-        kill POSIX::SIGINT,$_[0] ;
-    #}
+        $ret = kill POSIX::SIGINT,$_[0] ;
+    }
+    else{ 
+        $ret = kill POSIX::SIGTERM,$_[0] ;
+    }
+    
+    #client进程退出没有那么快，马上检查的话，仍然是存在的，干脆先不检查了
+    #return !$self->check_process($_[0]);
+
+    return $ret;
 }
 sub check_process {
     my $self = shift;
@@ -213,9 +210,15 @@ sub start_client {
     if(!$param->{client}){
         return {code => 1, status=>'client not found',};
     }
+    elsif($self->max_clients < keys %{$self->backend}){
+        return {code => 5, status=>'max clients exceed'};
+    }
     elsif(exists $self->backend->{$param->{client}}){
-        return {code=>0, status=>'client already exists',%{ $self->backend->{$param->{client}} }}
-            if $self->check_process($self->backend->{$param->{client}}{pid});
+        if( $self->check_process($self->backend->{$param->{client}}{pid}) ){
+            my %client = %{ $self->backend->{$param->{client}} };
+            for(keys %client){ delete $client{$_} if substr($_,0,1) eq "_"};
+            return {code=>0, status=>'client already exists',%client};
+        }
     }
     my $backend_port = empty_port({host=>'127.0.0.1',port=>$self->backend_start_port,proto=>'tcp'});
     return {code => 2, status=>'no available port',client=>$param->{client}} if not defined $backend_port;
@@ -232,7 +235,6 @@ sub start_client {
         $poll_api =  $url->to_string;
     }
     $param->{account} = $param->{client};
-    $self->reform_hash($param);
 
     for my $env(keys %ENV){
         delete $ENV{$env} if $env=~/^MOJO_WEIXIN_([A-Z_]+)$/;
@@ -244,6 +246,15 @@ sub start_client {
     $ENV{MOJO_WEIXIN_PLUGIN_OPENWX_PORT} = $backend_port;
     $ENV{MOJO_WEIXIN_PLUGIN_OPENWX_POST_API} = $post_api;
     $ENV{MOJO_WEIXIN_PLUGIN_OPENWX_POLL_API} = $poll_api;
+
+    $ENV{MOJO_WEIXIN_LOG_PATH} = $self->log_path;
+    $ENV{MOJO_WEIXIN_LOG_ENCODING} = $self->log_encoding;
+    $ENV{MOJO_WEIXIN_LOG_CONSOLE} = $self->log_console;
+    $ENV{MOJO_WEIXIN_DISABLE_COLOR} = $self->disable_color;
+    $ENV{MOJO_WEIXIN_HTTP_DEBUG} = $self->http_debug;
+    $ENV{MOJO_WEIXIN_LOG_LEVEL} = $self->log_level;
+    $ENV{MOJO_WEIXIN_CONTROLLER_PID} = $$;
+
     $ENV{MOJO_WEIXIN_TMPDIR} = $self->tmpdir if not defined $ENV{MOJO_WEIXIN_TMPDIR};
     $ENV{MOJO_WEIXIN_STATE_PATH} = File::Spec->catfile($ENV{MOJO_WEIXIN_TMPDIR},join('','mojo_weixin_state_',$ENV{MOJO_WEIXIN_ACCOUNT},'.json')) if not defined $ENV{MOJO_WEIXIN_STATE_PATH};
     $ENV{MOJO_WEIXIN_QRCODE_PATH} = File::Spec->catfile($ENV{MOJO_WEIXIN_TMPDIR},join('','mojo_weixin_qrcode_',$ENV{MOJO_WEIXIN_ACCOUNT},'.jpg')) if not defined $ENV{MOJO_WEIXIN_QRCODE_PATH};
@@ -253,9 +264,9 @@ sub start_client {
         my $template =<<'MOJO_WEIXIN_CLIENT_TEMPLATE';
 #!/usr/bin/env perl
 use Mojo::Weixin;
+$|=1;
 my $client = Mojo::Weixin->new(log_head=>"[$ENV{MOJO_WEIXIN_ACCOUNT}][$$]");
 $0 = "wxclient(" . $client->account . ")" if $^O ne "MSWin32";
-$SIG{INT} = 'IGNORE' if ($^O ne 'MSWin32' and !-t);
 $client->load(["ShowMsg","UploadQRcode"]);
 $client->load("Openwx",data=>{listen=>[{host=>"127.0.0.1",port=>$ENV{MOJO_WEIXIN_PLUGIN_OPENWX_PORT} }], post_api=>$ENV{MOJO_WEIXIN_PLUGIN_OPENWX_POST_API} || undef,post_event=>$ENV{MOJO_WEIXIN_PLUGIN_OPENWX_POST_EVENT} // 1,post_media_data=> $ENV{MOJO_WEIXIN_PLUGIN_OPENWX_POST_MEDIA_DATA} // 1, poll_api=>$ENV{MOJO_WEIXIN_PLUGIN_OPENWX_POLL_API} || undef, poll_interval => $ENV{MOJO_WEIXIN_PLUGIN_OPENWX_POLL_INTERVAL} },call_on_load=>1);
 $client->run();
@@ -310,7 +321,7 @@ MOJO_WEIXIN_CLIENT_TEMPLATE
             exec $Config{perlpath} || 'perl',$template_path;
         }
         else{
-            sleep 1;
+            select undef,undef,undef,0.05;
             if($pid!~/^\d+$/){
                 return {code=>4,status=>'client pid not ok' };
             }
@@ -378,18 +389,41 @@ sub run {
     $self->ioloop->start if not $self->ioloop->is_running;
 }
 
+package Mojo::Weixin::Controller::App::Controller;
+use Mojo::JSON ();
+use Mojo::Util ();
+use base qw(Mojolicious::Controller);
+sub render{
+    my $self = shift;
+    if($_[0] eq 'json'){
+        $self->res->headers->content_type('application/json');
+        $self->SUPER::render(data=>Mojo::JSON::to_json($_[1]),@_[2..$#_]);
+    }
+    else{$self->SUPER::render(@_)}
+}
+sub safe_render{
+    my $self = shift;
+    $self->render(@_) if (defined $self->tx and !$self->tx->is_finished);
+}
+sub param{
+    my $self = shift;
+    my $data = $self->SUPER::param(@_);
+    defined $data?Mojo::Util::encode("utf8",$data):undef;
+}
+sub params {
+    my $self = shift;
+    my $hash = $self->req->params->to_hash ;
+    $self->stash('wxc')->reform($hash);
+    return $hash;
+}
 package Mojo::Weixin::Controller::App;
 use Mojolicious::Lite;
 use Mojo::Transaction::HTTP;
-helper safe_render =>sub {
-    my $c = shift;
-    $c->render(@_) if (defined $c->tx and !$c->tx->is_finished);
-};
+app->controller_class('Mojo::Weixin::Controller::App::Controller');
 under sub {
     my $c = shift;
     if(ref $c->stash('wxc')->auth eq "CODE"){
-        my $hash  = $c->req->params->to_hash;
-        $c->stash('wxc')->reform_hash($hash);
+        my $hash  = $c->params;
         my $ret = 0;
         eval{
             $ret = $c->stash('wxc')->auth->($hash,$c);
@@ -402,13 +436,13 @@ under sub {
 };
 get '/openwx/start_client' => sub{
     my $c = shift;
-    my $hash   = $c->req->params->to_hash;
+    my $hash   = $c->params;
     my $result =  $c->stash('wxc')->start_client($hash);
     $c->safe_render(json=>$result);
 };
 get '/openwx/stop_client' => sub{
     my $c = shift;
-    my $hash   = $c->req->params->to_hash;
+    my $hash   = $c->params;
     my $result = $c->stash('wxc')->stop_client($hash);
     $c->safe_render(json=>$result);
 };
@@ -462,7 +496,7 @@ get '/openwx/check_client' => sub{
             my @client;
             for my $client ( values %{ $c->stash('wxc')->backend }){
                 my $state_path = $client->{_state_path};
-                my $json = $c->stash('wxc')->decode_json($c->stash('wxc')->slurp($state_path));
+                my $json = $c->stash('wxc')->from_json($c->stash('wxc')->slurp($state_path));
                 $json->{port} = $client->{port};
                 push @client,$json;
             }
@@ -486,6 +520,7 @@ any '/openwx/*whatever'  => sub{
         $c->safe_render(json => {code => 1, status=>'client not exists',});
         return;
     }
+    $c->inactivity_timeout(120);
     $c->render_later;
     my $tx = Mojo::Transaction::HTTP->new(req=>$c->req->clone);
     $tx->req->url->host("127.0.0.1");
@@ -493,7 +528,7 @@ any '/openwx/*whatever'  => sub{
     $tx->req->url->scheme('http');
     $tx->req->headers->header('Host',$tx->req->url->host_port);
     return if $c->stash('mojo.finished');
-    $c->ua->start($tx,sub{
+    $c->stash('wxc')->ua->start($tx,sub{
         my ($ua,$tx) = @_;
         $c->tx->res($tx->res);
         $c->rendered;

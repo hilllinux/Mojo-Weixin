@@ -12,6 +12,7 @@ sub Mojo::Weixin::_login {
         }
     }
     else{
+        $self->info("登录状态已失效，需要重新登录");
         $self->clear_cookie();
     }
     my $qrcode_uuid = $self->_get_qrcode_uuid(); 
@@ -19,6 +20,7 @@ sub Mojo::Weixin::_login {
         $self->info("无法获取到登录二维码，登录失败");
         $self->stop();
     }
+    $self->qrcode_uuid($qrcode_uuid);
     if(not $self->_get_qrcode_image($qrcode_uuid)){
         $self->info("下载二维码失败，客户端退出");
         $self->stop();
@@ -27,6 +29,7 @@ sub Mojo::Weixin::_login {
     $self->info("等待手机微信扫描二维码...");
     $self->state('scaning');
     while(1){
+        $self->check_controller();
         my @query_string = (
             loginicon => 'true',
             uuid    =>  $qrcode_uuid,
@@ -45,6 +48,7 @@ sub Mojo::Weixin::_login {
                 $self->info("登录二维码已失效，重新获取二维码");
                 $qrcode_uuid = $self->_get_qrcode_uuid();
                 $self->_get_qrcode_image($qrcode_uuid);
+                $self->state('scaning');
                 $i = 1;
                 next;
             }
@@ -65,11 +69,15 @@ sub Mojo::Weixin::_login {
             my $data = $self->http_get($data{redirect_uri} . '&fun=new&version=v2&lang=zh_CN',{Referer=>'https://' . $self->domain . '/'});
             #<error><ret>0</ret><message>OK</message><skey>@crypt_859d8a8a_3f3db5290570080d1db29da9507e35de</skey><wxsid>rsuMHe7xmA0aHW1D</wxsid><wxuin>138122335</wxuin><pass_ticket>hWdpMVCMqXIVfhXLcsJxYrC6bv785tVDLZAres096ZE%3D</pass_ticket></error
             if($data !~ m#^<error>.*</error>#){
-                $self->error("登录返回数据格式异常");
+                $self->error("登录返回数据格式无效");
                 return 0;
             }
             my %d = $data=~/<([^<>]+?)>([^<>]+?)<\/\1>/g;
-            return 0 if $d{ret} != 0;
+            if($d{ret}!=0){
+                $self->error("登录返回状态码异常: $d{ret}, $d{message}");
+                $self->emit(login => -1,$d{message});
+                return 0;
+            }
             $self->skey($d{skey} || '');
             $self->wxsid($d{wxsid} || $self->search_cookie("wxsid"));
             $self->wxuin($d{wxuin} || $self->search_cookie("wxuin"));
@@ -81,6 +89,7 @@ sub Mojo::Weixin::_login {
         elsif($data{code} == 400){
             $self->info("登录错误，客户端退出");
             $self->stop();
+            last;
         }
         elsif($data{code} == 500){
             $self->info("登录错误，客户端尝试重新登录...");
@@ -88,6 +97,7 @@ sub Mojo::Weixin::_login {
             $show_tip = 1;
             $qrcode_uuid = $self->_get_qrcode_uuid();
             $self->_get_qrcode_image($qrcode_uuid);
+            $self->state('scaning');
             next;
         }
     }

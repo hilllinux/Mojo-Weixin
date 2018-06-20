@@ -8,9 +8,12 @@ WriteMakefile(
     DISTNAME            => 'Mojo-Weixin',
     LICENSE             => "perl",
     PREREQ_PM         => {
+        "Compress::Raw::Zlib"   => 0,
+        "IO::Compress::Gzip"    => 0,
         "Time::HiRes"           => 0,
         "Time::Piece"           => 0,
         "Time::Seconds"         => 0,
+        "Digest::SHA"           => 0,
         "Digest::MD5"           => 0,
         "Encode::Locale"        => 0,
         "IO::Socket::SSL"       => '1.94',

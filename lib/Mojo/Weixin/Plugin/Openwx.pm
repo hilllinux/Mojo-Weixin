@@ -1,7 +1,6 @@
 package Mojo::Weixin::Plugin::Openwx;
 our $PRIORITY = 98;
 use strict;
-use Encode;
 use POSIX qw();
 use Mojo::Util qw();
 use List::Util qw(first);
@@ -14,8 +13,10 @@ sub call{
     my $data   =  shift;
     $check_event_list = Mojo::Weixin::List->new(max_size=>$data->{check_event_list_max_size} || 20);
     $data->{post_media_data} = 1 if not defined $data->{post_media_data};
-    $data->{post_event_list} = [qw(login stop state_change input_qrcode new_group new_friend new_group_member lose_group lose_friend lose_group_member)] 
+    $data->{post_event} = 1 if not defined $data->{post_event};
+    $data->{post_event_list} = [qw(login stop state_change input_qrcode new_group new_friend new_group_member lose_group lose_friend lose_group_member friend_request)] 
         if ref $data->{post_event_list} ne 'ARRAY'; 
+    $data->{post_stdout} = 0 if not defined $data->{post_stdout};
 
     if(defined $data->{poll_api}){
         $client->on('_mojo_weixin_plugin_openwx_poll_over' => sub{
@@ -25,24 +26,27 @@ sub call{
         });
         $client->emit('_mojo_weixin_plugin_openwx_poll_over');
     }
-
+    
     $client->on(all_event => sub{
         my($client,$event,@args) =@_;
         return if not first {$event eq $_} @{ $data->{post_event_list} };
-        if(defined $data->{post_api} and $event eq  'login' or $event eq 'stop' or $event eq 'state_change'){
+        if($event eq  'login' or $event eq 'stop' or $event eq 'state_change'){
             my $post_json = {};
             $post_json->{post_type} = "event";
             $post_json->{event} = $event;
             $post_json->{params} = [@args];
-            my($data,$ua,$tx) = $client->http_post($data->{post_api},{ua_connect_timeout=>5,ua_request_timeout=>5,ua_inactivity_timeout=>5,ua_retry_times=>2},json=>$post_json);
-            if($tx->success){
-                $client->debug("插件[".__PACKAGE__ ."]事件[".$event . "](@args)上报成功");
-            }
-            else{
-                $client->warn("插件[".__PACKAGE__ . "]事件[".$event."](@args)上报失败:" . encode("utf8",$tx->error->{message}));
+            $client->stdout_line($client->to_json($post_json)) if $data->{post_stdout};
+            if(defined $data->{post_api}){
+                my($data,$ua,$tx) = $client->http_post($data->{post_api},{ua_connect_timeout=>5,ua_request_timeout=>5,ua_inactivity_timeout=>5,ua_retry_times=>1},json=>$post_json);
+                if($tx->success){
+                    $client->debug("插件[".__PACKAGE__ ."]事件[".$event . "](@args)上报成功");
+                }
+                else{
+                    $client->warn("插件[".__PACKAGE__ . "]事件[".$event."](@args)上报失败:" . $client->encode("utf8",$tx->error->{message}));
+                }
             } 
         }
-        elsif(defined $data->{post_api} and $event eq 'input_qrcode'){
+        elsif($event eq 'input_qrcode'){
             my ($qrcode_path,$qrcode_data) = @args;
             eval{ $qrcode_data = Mojo::Util::b64_encode($qrcode_data);};
             if($@){
@@ -53,12 +57,16 @@ sub call{
             $post_json->{post_type} = "event";
             $post_json->{event} = $event;
             $post_json->{params} = [$qrcode_path,$qrcode_data];
-            my($data,$ua,$tx) = $client->http_post($data->{post_api},json=>$post_json);
-            if($tx->success){
-                $client->debug("插件[".__PACKAGE__ ."]事件[".$event . "]上报成功");
-            }
-            else{
-                $client->warn("插件[".__PACKAGE__ . "]事件[".$event."]上报失败:" . encode("utf8",$tx->error->{message}));
+            push @{ $post_json->{params} },$client->qrcode_upload_url if defined $client->qrcode_upload_url;
+            $client->stdout_line($client->to_json($post_json)) if $data->{post_stdout};
+            if(defined $data->{post_api}){
+                my($data,$ua,$tx) = $client->http_post($data->{post_api},json=>$post_json);
+                if($tx->success){
+                    $client->debug("插件[".__PACKAGE__ ."]事件[".$event . "]上报成功");
+                }
+                else{
+                    $client->warn("插件[".__PACKAGE__ . "]事件[".$event."]上报失败:" . $client->encode("utf8",$tx->error->{message}));
+                }
             }
         }
         elsif($event =~ /^new_group|lose_group|new_friend|lose_friend|new_group_member|lose_group_member$/){
@@ -72,13 +80,14 @@ sub call{
                 $post_json->{params} = [$args[0]->to_json_hash(0)];
             }
             $check_event_list->append($post_json);
+            $client->stdout_line($client->to_json($post_json)) if $data->{post_stdout};
             $client->http_post($data->{post_api},json=>$post_json,sub{
                 my($data,$ua,$tx) = @_;
                 if($tx->success){
                     $client->debug("插件[".__PACKAGE__ ."]事件[".$event."]上报成功");
                 }
                 else{
-                    $client->warn("插件[".__PACKAGE__ . "]事件[".$event."]上报失败: ".encode("utf8",$tx->error->{message}));
+                    $client->warn("插件[".__PACKAGE__ . "]事件[".$event."]上报失败: ".$client->encode("utf8",$tx->error->{message}));
                 }
             }) if defined $data->{post_api};
         }
@@ -90,16 +99,36 @@ sub call{
                 params    => [$object->to_json_hash(0),$property,$old,$new],
             };
             $check_event_list->append($post_json);
+            $client->stdout_line($client->to_json($post_json)) if $data->{post_stdout};
             $client->http_post($data->{post_api},json=>$post_json,sub{
                 my($data,$ua,$tx) = @_;
                 if($tx->success){
                     $client->debug("插件[".__PACKAGE__ ."]事件[".$event."]上报成功");
                 }
                 else{
-                    $client->warn("插件[".__PACKAGE__ . "]事件[".$event."]上报失败: ".encode("utf8",$tx->error->{message}));
+                    $client->warn("插件[".__PACKAGE__ . "]事件[".$event."]上报失败: ".$client->encode("utf8",$tx->error->{message}));
                 }
             }) if defined $data->{post_api};
 
+        }
+        elsif($event eq 'friend_request'){
+            my($id,$displayname,$verify,$ticket) = @args;
+            my $post_json = {
+                post_type => "event",
+                event     => $event,
+                params    => [$id,$displayname,$verify,$ticket],
+            };
+            $check_event_list->append($post_json);
+            $client->stdout_line($client->to_json($post_json)) if $data->{post_stdout};
+            $client->http_post($data->{post_api},json=>$post_json,sub{
+                my($data,$ua,$tx) = @_;
+                if($tx->success){
+                    $client->debug("插件[".__PACKAGE__ ."]事件[".$event."]上报成功");
+                }
+                else{
+                    $client->warn("插件[".__PACKAGE__ . "]事件[".$event."]上报失败: ".$client->encode("utf8",$tx->error->{message}));
+                }
+            }) if defined $data->{post_api};
         }
         elsif($event =~ /^update_user|update_friend|update_group$/){
             my ($ref) = @args;
@@ -108,14 +137,14 @@ sub call{
                 event     => $event,
                 params    => [$event eq 'update_user'?$ref->to_json_hash():map {$_->to_json_hash()} @{$ref}], 
             };
-            $check_event_list->append($post_json);
+            $client->stdout_line($client->to_json($post_json)) if $data->{post_stdout};
             $client->http_post($data->{post_api},json=>$post_json,sub{
                 my($data,$ua,$tx) = @_;
                 if($tx->success){
                     $client->debug("插件[".__PACKAGE__ ."]事件[".$event."]上报成功");
                 }
                 else{
-                    $client->warn("插件[".__PACKAGE__ . "]事件[".$event."]上报失败: ".encode("utf8",$tx->error->{message}));
+                    $client->warn("插件[".__PACKAGE__ . "]事件[".$event."]上报失败: ".$client->encode("utf8",$tx->error->{message}));
                 }
             }) if defined $data->{post_api};
         }
@@ -127,14 +156,15 @@ sub call{
         delete $post_json->{media_data} if ($post_json->{format} eq "media" and ! $data->{post_media_data});
         $post_json->{post_type} = "receive_message";
         $check_event_list->append($post_json);
+        $client->stdout_line($client->to_json($post_json)) if $data->{post_stdout};
         $client->http_post($data->{post_api},json=>$post_json,sub{
             my($data,$ua,$tx) = @_;
             if($tx->success){
-                $client->debug("插件[".__PACKAGE__ ."]接收消息[".$msg->id."]上报成功");
+                $client->debug( $tx->res->body );
                 if($tx->res->headers->content_type =~m#text/json|application/json#){
                     #文本类的返回结果必须是json字符串
                     my $json;
-                    eval{$json = $tx->res->json};
+                    eval{$json = $client->decode_json($tx->res->body);$client->reform($json)};
                     if($@){$client->warn($@);return}
                     if(defined $json){
                         #暂时先不启用format的属性
@@ -142,9 +172,8 @@ sub call{
                         #if((!defined $json->{format}) or (defined $json->{format} and $json->{format} eq "text")){
                         #    $msg->reply(Encode::encode("utf8",$json->{reply})) if defined $json->{reply};
                         #}
-
-                        $msg->reply(Encode::encode("utf8",$json->{reply})) if defined $json->{reply};
-                        $msg->reply_media(Encode::encode("utf8",$json->{media})) if defined $json->{media} and $json->{media} =~ /^https?:\/\//;
+                        $msg->reply($json->{reply}) if defined $json->{reply};
+                        $msg->reply_media($json->{media}) if defined $json->{media} and $json->{media} =~ /^https?:\/\//;
                     }
                 }
                 #elsif($tx->res->headers->content_type =~ m#image/#){
@@ -152,7 +181,7 @@ sub call{
                 #}
             }
             else{
-                $client->warn("插件[".__PACKAGE__ . "]接收消息[".$msg->id."]上报失败: ".$tx->error->{message}); 
+                $client->warn("插件[".__PACKAGE__ . "]接收消息[".$msg->id."]上报失败: ". $client->encode("utf8",$tx->error->{message})); 
             }
         }) if defined $data->{post_api};
     });
@@ -164,6 +193,7 @@ sub call{
         delete $post_json->{media_data} if ($post_json->{format} eq "media" and ! $data->{post_media_data});
         $post_json->{post_type} = "send_message";
         $check_event_list->append($post_json);
+        $client->stdout_line($client->to_json($post_json)) if $data->{post_stdout};
         $client->http_post($data->{post_api},json=>$post_json,sub{
             my($data,$ua,$tx) = @_;
             if($tx->success){
@@ -171,12 +201,12 @@ sub call{
                 if($tx->res->headers->content_type =~m#text/json|application/json#){
                     #文本类的返回结果必须是json字符串
                     my $json;
-                    eval{$json = $tx->res->json};
+                    eval{$json = $client->decode_json($tx->res->body);$client->reform($json)};
                     if($@){$client->warn($@);return}
                     if(defined $json){
                         #{code=>0,reply=>"回复的消息",format=>"text"}
                         if((!defined $json->{format}) or (defined $json->{format} and $json->{format} eq "text")){
-                            $msg->reply(Encode::encode("utf8",$json->{reply})) if defined $json->{reply};
+                            $msg->reply($json->{reply}) if defined $json->{reply};
                         }
                     }
                 }
@@ -185,17 +215,48 @@ sub call{
                 #}
             }
             else{
-                $client->warn("插件[".__PACKAGE__ . "]发送消息[".$msg->id."]上报失败: ".$tx->error->{message}); 
+                $client->warn("插件[".__PACKAGE__ . "]发送消息[".$msg->id."]上报失败: ".$client->encode("utf8",$tx->error->{message})); 
             }
         }) if defined $data->{post_api};
     });
-
+    package Mojo::Weixin::Plugin::Openwx::App::Controller;
+    use Mojo::JSON ();
+    use Mojo::Util ();
+    use base qw(Mojolicious::Controller);
+    sub render{
+        my $self = shift;
+        if($_[0] eq 'json'){
+            $self->res->headers->content_type('application/json');
+            $self->SUPER::render(data=>Mojo::JSON::to_json($_[1]),@_[2..$#_]);
+        }
+        else{$self->SUPER::render(@_)}
+    }
+    sub safe_render{
+        my $self = shift;
+        $self->render(@_) if (defined $self->tx and !$self->tx->is_finished);
+    }
+    sub param{
+        my $self = shift;
+        my $data = $self->SUPER::param(@_);
+        defined $data?Mojo::Util::encode("utf8",$data):undef;
+    }
+    sub params {
+        my $self = shift;
+        my $hash = $self->req->params->to_hash ;
+        $client->reform($hash);
+        return $hash;
+    }
     package Mojo::Weixin::Plugin::Openwx::App;
-    use Encode;
+    no utf8;
+    use Encode ();
     use Mojo::IOLoop;
     use Mojolicious::Lite;
+    app->controller_class('Mojo::Weixin::Plugin::Openwx::App::Controller');
     app->hook(after_render=>sub{
         my ($c, $output, $format) = @_;
+
+        $c->res->headers->header("Access-Control-Allow-Origin" => "*");
+
         my $datatype =  $c->param("datatype");
         return if not defined $datatype;
         return if defined $datatype and $datatype ne 'jsonp';
@@ -203,28 +264,31 @@ sub call{
         return if not defined $jsoncallback;
         $$output = "$jsoncallback($$output)";
     });
-    helper safe_render =>sub {
-        my $c = shift;
-        $c->render(@_) if (defined $c->tx and !$c->tx->is_finished); 
-    };
     under sub {
         my $c = shift;
         if(ref $data eq "HASH" and ref $data->{auth} eq "CODE"){
-            my $hash  = $c->req->params->to_hash;
-            $client->reform_hash($hash);
+            my $hash  = $c->params;
             my $ret = 0;
             eval{
                 $ret = $data->{auth}->($hash,$c);
             };
             $client->warn("插件[Mojo::Weixin::Plugin::Openwx]认证回调执行错误: $@") if $@;
-            $c->safe_render(text=>"auth failure",status=>403) if not $ret;
+            $c->safe_render(json=>{code=>-6,status=>"auth failure"}) if not $ret;
             return $ret;
         }
         else{return 1} 
     };
+    options '/*' => sub{
+        my $c = shift;
+        $c->res->headers->header("Access-Control-Allow-Origin" => "*");
+        $c->res->headers->header("Access-Control-Allow-Methods" => "OPTIONS, HEAD, GET, POST");
+        $c->res->headers->header("Access-Control-Allow-Headers" => "X-Requested-With, X-Auth-Token, Content-Type, Content-Length, Authorization");
+        $c->rendered(200);
+    };
     get '/openwx/get_user_info'     => sub {$_[0]->safe_render(json=>$client->user->to_json_hash());};
     get '/openwx/get_friend_info'   => sub {$_[0]->safe_render(json=>[map {$_->to_json_hash()} @{$client->friend}]); };
     get '/openwx/get_group_info'    => sub {$_[0]->safe_render(json=>[map {$_->to_json_hash()} @{$client->group}]); };
+    get '/openwx/get_group_basic_info' =>  sub {$_[0]->safe_render(json=>[map {delete $_->{member};$_} map {$_->to_json_hash()} @{$client->group}]); };
     any [qw(GET POST)] => '/openwx/check_event'          => sub{
         my $c = shift;
         $c->render_later;
@@ -233,9 +297,10 @@ sub call{
             return;
         }
         else{
-            $c->inactivity_timeout(35);
-            my $timer = Mojo::IOLoop->timer( 30 ,sub { $c->safe_render(json=>[]) });
-            $check_event_list->once(append=>sub{
+            $c->inactivity_timeout(120);
+            my($timer,$cb);
+            $timer = Mojo::IOLoop->timer( 30 ,sub { $check_event_list->unsubscribe(append=>$cb);$c->safe_render(json=>[]) });
+            $cb = $check_event_list->once(append=>sub{
                 my($list,$element) = @_;
                 Mojo::IOLoop->remove($timer);
                 $c->safe_render(json=>[ $list->pick ]);
@@ -266,189 +331,163 @@ sub call{
             $c->safe_render(json=>{code=>100,status=>"object not found"});
         }
     };
+    any [qw(GET POST)] => 'openwx/revoke_message' => sub{
+        my $c = shift;
+        my $p = $c->params;
+        if(defined $p->{id}){
+            my $ret = $client->revoke_message($p->{id});
+            if($ret){
+                $c->safe_render(json=>{id=>$p->{id},code=>0,status=>'revoke success'});
+            }
+            else{
+                $c->safe_render(json=>{id=>$p->{id},code=>0,status=>'revoke failure'});
+            }
+        }
+        else{
+            $c->safe_render(json=>{id=>$p->{id},code=>-1,status=>'msg id not found'});
+        }
+    };
     any [qw(GET POST)] => '/openwx/send_friend_message'         => sub{
         my $c = shift;
-        my($id,$account,$displayname,$markname,$content)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("account"),$c->param("displayname"),$c->param("markname"),$c->param("content"));
-        my($media_id,$media_type,$media_mime,$media_name,$media_size,$media_data,$media_mtime,$media_ext,$media_path) = 
-            map {defined $_?Encode::encode("utf8",$_):$_} 
-        (
-            $c->param("media_id"),
-            $c->param("media_type"),
-            $c->param("media_mime"),
-            $c->param("media_name"),
-            $c->param("media_size"),
-            $c->param("media_data"),
-            $c->param("media_mtime"),
-            $c->param("media_ext"),
-            $c->param("media_path"),
-        );
-        if(defined $id and $id eq '@all'){#群发给所有好友
+        my $p = $c->params;
+        if(defined $p->{id} and $p->{id} eq '@all'){#群发给所有好友
+            $c->render_later;
             for my $f ($client->friends){
-                $client->send_message($f,$content,sub{my $msg= $_[1];$msg->from("api");}) if defined $content;
-                if(defined $media_data or defined $media_path){
-                    $client->send_media($f,{
-                            media_id    =>  $media_id,
-                            media_type  =>  $media_type,
-                            media_mime  =>  $media_mime,
-                            media_name  =>  $media_name,
-                            media_size  =>  $media_size,
-                            media_data  =>  $media_data,
-                            media_mtime =>  $media_mtime,
-                            media_ext   =>  $media_ext,
-                            media_path  =>  $media_path,
-                        },sub{my $msg= $_[1];$msg->from("api");}
+                $client->send_message($f,$p->{content},sub{my $msg= $_[1];$msg->from("api");}) if defined $p->{content};
+                if(defined $p->{media_data} or defined $p->{media_path}){
+                    $c->inactivity_timeout(120);
+                    $client->send_media($f,{map {/media_/?($_=>$p->{$_}):()} keys %$p},sub{my $msg= $_[1];$msg->from("api");}
                     );
                 }
             }
-            $c->safe_render(json=>{msg_id=>0,code=>0,status=>'request already executed'});
+            $c->safe_render(json=>{id=>0,code=>0,status=>'request already executed'});
             return;
         }
-        my $object = $client->search_friend(id=>$id,account=>$account,displayname=>$displayname,markname=>$markname);
+        my $object = $client->search_friend(id=>$p->{id},account=>$p->{account},displayname=>$p->{displayname},markname=>$p->{markname});
         if(defined $object){
-            $c->render_later;
-            $client->send_message($object,$content,sub{
-                my $msg= $_[1];
-                $msg->cb(sub{
-                    my($client,$msg,$status)=@_;
-                    $c->safe_render(json=>{msg_id=>$msg->id,code=>$status->code,status=>Encode::decode("utf8",$status->msg)});
-                });
-                $msg->from("api");
-            }) if defined $content;
-            if(defined $media_data or defined $media_path or defined $media_id){
-                $client->send_media($object,{
-                    media_id    =>  $media_id,
-                    media_type  =>  $media_type,
-                    media_mime  =>  $media_mime,
-                    media_name  =>  $media_name,
-                    media_size  =>  $media_size,
-                    media_data  =>  $media_data,
-                    media_mtime =>  $media_mtime,
-                    media_ext   =>  $media_ext,
-                    media_path  =>  $media_path,
-                },sub{
-                    my $msg= $_[1];
-                    $msg->cb(sub{
-                        my($client,$msg,$status)=@_;
-                        $c->safe_render(json=>{msg_id=>$msg->id,media_id=>join(":",$msg->media_id,$msg->media_code),code=>$status->code,status=>Encode::decode("utf8",$status->msg)});
+            if(defined $p->{content}){
+                if($p->{async}){
+                    $client->send_message($object,$p->{content},sub{$_[1]->from("api")}); 
+                    $c->safe_render(json=>{code=>0,status=>"request already in execution"});
+                }
+                else{
+                    $c->render_later;
+                    $client->send_message($object,$p->{content},sub{
+                        my $msg= $_[1];
+                        $msg->cb(sub{
+                            my($client,$msg)=@_;
+                            $c->safe_render(json=>{id=>$msg->id,code=>$msg->code,status=>$msg->info});
+                        });
+                        $msg->from("api");
                     });
-                    $msg->from("api");
-                });
+                }
+            }
+            if(defined $p->{media_data} or defined $p->{media_path} or defined $p->{media_id}){
+                if($p->{async}){
+                    $client->send_media($object,{map {/media_/?($_=>$p->{$_}):()} keys %$p},sub{$_[1]->from("api")});
+                    $c->safe_render(json=>{code=>0,status=>"request already in execution"});
+                }
+                else{
+                    $c->inactivity_timeout(120);
+                    $client->send_media($object,{map {/media_/?($_=>$p->{$_}):()} keys %$p},sub{
+                        my $msg= $_[1];
+                        $msg->cb(sub{
+                            my($client,$msg)=@_;
+                            $c->safe_render(json=>{id=>$msg->id,media_id=>$msg->is_success?$msg->media_id:"",code=>$msg->code,status=>$msg->info});
+                        });
+                        $msg->from("api");
+                    });
+                }
             }
         }
-        else{$c->safe_render(json=>{msg_id=>undef,code=>100,status=>"object not found"});}
+        else{$c->safe_render(json=>{id=>undef,code=>100,status=>"object not found"});}
     };
     any [qw(GET POST)] => '/openwx/send_group_message'         => sub{
         my $c = shift;
-        my($id,$account,$displayname,$markname,$content)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("account"),$c->param("displayname"),$c->param("markname"),$c->param("content"));
-        my($media_id,$media_type,$media_mime,$media_name,$media_size,$media_data,$media_mtime,$media_ext,$media_path) =
-            map {defined $_?Encode::encode("utf8",$_):$_}
-        (
-            $c->param("media_id"),
-            $c->param("media_type"),
-            $c->param("media_mime"),
-            $c->param("media_name"),
-            $c->param("media_size"),
-            $c->param("media_data"),
-            $c->param("media_mtime"),
-            $c->param("media_ext"),
-            $c->param("media_path"),
-        );
-        my $object = $client->search_group(id=>$id,displayname=>$displayname);
+        my $p = $c->params;
+        my $object = $client->search_group(id=>$p->{id},displayname=>$p->{displayname});
         if(defined $object){
-            $c->render_later;
-            $client->send_message($object,$content,sub{
-                my $msg= $_[1];
-                $msg->cb(sub{
-                    my($client,$msg,$status)=@_;
-                    $c->safe_render(json=>{msg_id=>$msg->id,code=>$status->code,status=>decode("utf8",$status->msg)});
-                });
-                $msg->from("api");
-            }) if defined $content;
-            if(defined $media_data or defined $media_path or defined $media_id){
-                $client->send_media($object,{
-                    media_id    =>  $media_id,
-                    media_type  =>  $media_type,
-                    media_mime  =>  $media_mime,
-                    media_name  =>  $media_name,
-                    media_size  =>  $media_size,
-                    media_data  =>  $media_data,
-                    media_mtime =>  $media_mtime,
-                    media_ext   =>  $media_ext,
-                    media_path  =>  $media_path,
-                },sub{
-                    my $msg= $_[1];
-                    $msg->cb(sub{
-                        my($client,$msg,$status)=@_;
-                        $c->safe_render(json=>{msg_id=>$msg->id,media_id=>join(":",$msg->media_id,$msg->media_code),code=>$status->code,status=>Encode::decode("utf8",$status->msg)});
+            if(defined $p->{content}){
+                if($p->{async}){
+                    $client->send_message($object,$p->{content},sub{$_[1]->from("api")});
+                    $c->safe_render(json=>{code=>0,status=>"request already in execution"});   
+                }
+                else{
+                    $c->render_later;
+                    $client->send_message($object,$p->{content},sub{
+                        my $msg= $_[1];
+                        $msg->cb(sub{
+                            my($client,$msg)=@_;
+                            $c->safe_render(json=>{id=>$msg->id,code=>$msg->code,status=>$msg->info});
+                        });
+                        $msg->from("api");
                     });
-                    $msg->from("api");
-                });
+                }
+            }
+            if(defined $p->{media_data} or defined $p->{media_path} or defined $p->{media_id}){
+                if($p->{async}){
+                    $client->send_media($object,{map {/media_/?($_=>$p->{$_}):()} keys %$p},sub{$_[1]->from("api")});
+                    $c->safe_render(json=>{code=>0,status=>"request already in execution"});
+                }
+                else{
+                    $c->inactivity_timeout(120);
+                    $client->send_media($object,{map {/media_/?($_=>$p->{$_}):()} keys %$p},sub{
+                        my $msg= $_[1];
+                        $msg->cb(sub{
+                            my($client,$msg)=@_;
+                            $c->safe_render(json=>{id=>$msg->id,media_id=>$msg->is_success?$msg->media_id:"",code=>$msg->code,status=>$msg->info});
+                        });
+                        $msg->from("api");
+                    });
+                }
             }
         }
-        else{$c->safe_render(json=>{msg_id=>undef,code=>100,status=>"object not found"});}
+        else{$c->safe_render(json=>{id=>undef,code=>100,status=>"object not found"});}
     }; 
     any [qw(GET POST)] => '/openwx/consult'         => sub{
         my $c = shift;
-        my($id,$account,$displayname,$markname,$content,$timeout)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("account"),$c->param("displayname"),$c->param("markname"),$c->param("content"),$c->param("timeout"));
-        my($media_id,$media_type,$media_mime,$media_name,$media_size,$media_data,$media_mtime,$media_ext,$media_path) =
-            map {defined $_?Encode::encode("utf8",$_):$_}
-        (
-            $c->param("media_id"),
-            $c->param("media_type"),
-            $c->param("media_mime"),
-            $c->param("media_name"),
-            $c->param("media_size"),
-            $c->param("media_data"),
-            $c->param("media_mtime"),
-            $c->param("media_ext"),
-            $c->param("media_path"),
-        );
-        my $object = $client->search_friend(id=>$id,account=>$account,displayname=>$displayname,markname=>$markname);
+        my $p = $c->params;;
+        my $object = $client->search_friend(id=>$p->{id},account=>$p->{account},displayname=>$p->{displayname},markname=>$p->{markname});
         if(defined $object){
             $c->render_later;
-            $client->send_message($object,$content,sub{
+            $client->send_message($object,$p->{content},sub{
                 my $msg= $_[1];
                 $msg->cb(sub{
-                    my($client,$msg,$status)=@_;
+                    my($client,$msg)=@_;
                     my ($timer,$cb);
-                    $timer = Mojo::IOLoop->timer($timeout || 30,sub{
+                    $timer = Mojo::IOLoop->timer($p->{timeout} || 30,sub{
                         $client->unsubscribe(receive_message=>$cb);
-                        $c->safe_render(json=>{msg_id=>$msg->id,code=>$status->code,status=>Encode::decode("utf8",$status->msg),reply_status=>"reply timeout",reply=>undef});
+                        $c->safe_render(json=>{id=>$msg->id,code=>$msg->code,status=>$msg->info,reply_status=>"reply timeout",reply=>undef});
                     });
-                    $cb = $client->once(receive_message=>sub{
+                    $cb = $client->on(receive_message=>sub{
                         my($client,$msg) = @_;
                         Mojo::IOLoop->remove($timer);
-                        $c->safe_render(json=>{reply=>Encode::decode("utf8",$msg->content),msg_id=>$msg->id,code=>$status->code,status=>Encode::decode("utf8",$status->msg)}); 
+                        if($msg->sender->id eq $object->id){
+                            $client->unsubscribe(receive_message=>$cb);
+                            $c->safe_render(json=>{reply=>$msg->content,id=>$msg->id,code=>$msg->code,status=>$msg->info});
+                        }
                     });
                 });
                 $msg->from("api");
-            }) if defined $content;
-            if(defined $media_data or defined $media_path or defined $media_id){
-                $client->send_media($object,{
-                    media_id    =>  $media_id,
-                    media_type  =>  $media_type,
-                    media_mime  =>  $media_mime,
-                    media_name  =>  $media_name,
-                    media_size  =>  $media_size,
-                    media_data  =>  $media_data,
-                    media_mtime =>  $media_mtime,
-                    media_ext   =>  $media_ext,
-                    media_path  =>  $media_path,
-                },sub{
+            }) if defined $p->{content};
+            if(defined $p->{media_data} or defined $p->{media_path} or defined $p->{media_id}){
+                $c->inactivity_timeout(120);
+                $client->send_media($object,{map {/media_/?($_=>$p->{$_}):()} keys %$p },sub{
                     my $msg= $_[1];
                     $msg->cb(sub{
-                        my($client,$msg,$status)=@_;
-                        $c->safe_render(json=>{msg_id=>$msg->id,media_id=>join(":",$msg->media_id,$msg->media_code),code=>$status->code,status=>Encode::decode("utf8",$status->msg)});
+                        my($client,$msg)=@_;
+                        $c->safe_render(json=>{id=>$msg->id,media_id=>$msg->is_success?$msg->media_id:"",code=>$msg->code,status=>$msg->info});
                     });
                     $msg->from("api");
                 });
             }
         }
-        else{$c->safe_render(json=>{msg_id=>undef,code=>100,status=>"object not found"});}
+        else{$c->safe_render(json=>{id=>undef,code=>100,status=>"object not found"});}
     };
     any [qw(GET POST)] => '/openwx/create_group' => sub{
         my $c = shift;
-        my($friends,$displayname)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("friend"),$c->param("displayname"));
+        my $p = $c->params;
+        my($friends,$displayname)= ($p->{friends},$p->{displayname});
         my @id = split /,/,$friends;
         if(@id){
             my @friends;
@@ -472,7 +511,8 @@ sub call{
     };
     any [qw(GET POST)] => '/openwx/invite_friend' => sub{
         my $c = shift;
-        my($id,$displayname,$friends)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("displayname"),$c->param("friend"));
+        my $p = $c->params;
+        my($id,$displayname,$friends)= @$p{qw(id displayname friends)};
         my $object = $client->search_group(id=>$id,displayname=>$displayname,);
         if(not defined $object){
             $c->safe_render(json=>{code=>100,status=>"object not found"});
@@ -501,7 +541,8 @@ sub call{
     };
     any [qw(GET POST)] => '/openwx/kick_group_member' => sub{
         my $c = shift;
-        my($id,$displayname,$members)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("displayname"),$c->param("member"));
+        my $p = $c->params;
+        my($id,$displayname,$members)= @$p{qw( id displayname members )};
         my $object = $client->search_group(id=>$id,displayname=>$displayname,);
         if(not defined $object){
             $c->safe_render(json=>{code=>100,status=>"object not found"});
@@ -530,7 +571,8 @@ sub call{
     };
     any [qw(GET POST)] => '/openwx/set_group_displayname' => sub{
         my $c = shift;
-        my($id,$displayname,$new_displayname)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("displayname"),$c->param("new_displayname"));
+        my $p = $c->params;
+        my($id,$displayname,$new_displayname)= @$p{qw(id displayname new_displayname)};
         my $object = $client->search_group(id=>$id,displayname=>$displayname);
         if(defined $object){
             if($object->set_displayname($new_displayname)){
@@ -546,7 +588,7 @@ sub call{
     any [qw(GET POST)] => '/openwx/stick' => sub{
         my $c = shift;
         my($id,$op)= ($c->param("id"),$c->param("op"));
-        my $object = $client->is_group($id)?$client->search_group(id=>$id,):$client->search_friend(id=>$id);
+        my $object = $client->is_group_id($id)?$client->search_group(id=>$id,):$client->search_friend(id=>$id);
         if(defined $object){
             if($object->stick($op)){
                 $c->safe_render(json=>{code=>0,status=>"success"});
@@ -560,7 +602,8 @@ sub call{
     };
     any [qw(GET POST)] => '/openwx/set_friend_markname' => sub {
         my $c = shift;
-        my($id,$markname,$new_markname,$account,$displayname)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("markname"),$c->param("new_markname"),$c->param("account"),$c->param("displayname"));
+        my $p = $c->params;
+        my($id,$markname,$new_markname,$account,$displayname)= @$p{qw( id markname new_markname account displayname)};
         my $object = $client->search_friend(id=>$id,account=>$account,displayname=>$displayname,markname=>$markname);
         if(defined $object){
             if($object->set_markname($new_markname)){
@@ -574,7 +617,8 @@ sub call{
     };
     any [qw(GET POST)] => '/openwx/set_markname' => sub{
         my $c = shift;
-        my($id,$markname,$new_markname,$group_id,$account,$displayname)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("markname"),$c->param("new_markname"),$c->param("group_id"),$c->param("account"),$c->param("displayname"));
+        my $p = $c->params;
+        my($id,$markname,$new_markname,$group_id,$account,$displayname)= @$p{qw( id markname new_markname group_id account displayname )};
         my $object;
         if(defined $group_id){
             my $group = $client->search_group(id=>$group_id);
@@ -602,8 +646,7 @@ sub call{
     };
     any [qw(GET POST)] => '/openwx/make_friend' => sub{
         my $c = shift;
-        #my($id,$account,$displayname,$markname)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("account"),$c->param("displayname"),$c->param("markname"));
-        my($id,$verify)= map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("verify"));
+        my($id,$verify)= ($c->param("id"),$c->param("verify"));
         my $object;
         if($id eq $client->user->id){
             $c->safe_render(json=>{code=>101,status=>"can not be yourself"});
@@ -631,15 +674,26 @@ sub call{
     };
     any [qw(GET POST)] => '/openwx/get_avatar' => sub{
         my $c = shift;
-        my($id,$account,$displayname,$markname) = map {defined $_?Encode::encode("utf8",$_):$_} ($c->param("id"),$c->param("account"),$c->param("displayname"),$c->param("markname"),);
+        my $p = $c->params;
+        my($id,$account,$displayname,$markname,$group_id) = @$p{qw( id account displayname markname group_id )};
         my $object =    (defined $id and $id eq $client->user->id) ? $client->user 
-                :       $client->is_group($id)? $client->search_group(id=>$id,displayname=>$displayname)
-                :       $client->search_friend(id=>$id,account=>$account,displayname=>$displayname,markname=>$markname)
+                :       $client->is_group_id($id)? $client->search_group(id=>$id,displayname=>$displayname)
+                :       undef
         ;
-       
+        if(not defined $object){
+            if(defined $group_id and defined $id){
+                my $group =  $client->search_group(id=>$group_id);
+                $object = $group->search_group_member(id=>$id) if defined $group;
+            }
+            else{
+                $object = $client->search_friend(id=>$id,account=>$account,displayname=>$displayname,markname=>$markname);
+            }
+        }
         if(defined $object){
             $c->render_later;
+            my $timer = $client->timer(3,sub{$c->safe_render(data=>'',status=>'503',);});
             $object->get_avatar(sub{
+                $client->ioloop->remove($timer);
                 my ($path,$data,$mime) = @_;
                 my $mtime = time;
                 $c->res->headers->cache_control('max-age=3600');
@@ -649,8 +703,15 @@ sub call{
                 $c->safe_render(data=>$data,);  
             });
         }
-        else{$c->safe_render(json=>{msg_id=>undef,code=>100,status=>"object not found"});}
+        else{$c->safe_render(json=>{id=>undef,code=>100,status=>"object not found"});}
 
+    };
+    any [qw(GET POST)] => '/openwx/accept_friend_request' =>sub{
+        my $c = shift;
+        my $p = $c->params;
+        my($id,$displayname,$ticket) = @$p{qw( id displayname ticket)};
+        my $ret = $client->accept_friend_request($id,$displayname,$ticket);
+        $c->safe_render(json=>{code=>($ret?0:-1),status=>($ret?"success":"failure"),id=>$id,displayname=>$displayname,ticket=>$ticket});
     };
     any [qw(GET POST)] => '/openwx/get_client_info' => sub{
         my $c = shift;
@@ -664,7 +725,7 @@ sub call{
             runtime=>int(time - $client->start_time),
             http_debug=>$client->http_debug,
             log_encoding=>$client->log_encoding,
-            log_path=>Mojo::Util::decode("utf8",$client->log_path||""),
+            log_path=>$client->log_path||"",
             log_level=>$client->log_level,
             status=>"success",
         });
@@ -683,45 +744,45 @@ sub call{
     };
     any [qw(GET POST)] => '/openwx/upload_media' => sub{
         my $c = shift;
-        my($media_type,$media_mime,$media_name,$media_size,$media_data,$media_mtime,$media_ext,$media_path) =
-            map {defined $_?Encode::encode("utf8",$_):$_}
-        (
-            $c->param("media_type"),
-            $c->param("media_mime"),
-            $c->param("media_name"),
-            $c->param("media_size"),
-            $c->param("media_data"),
-            $c->param("media_mtime"),
-            $c->param("media_ext"),
-            $c->param("media_path"),
-        );
+        my $p = $c->params;
         $c->render_later;
-        $client->upload_media({
-                media_type  => $media_type,
-                media_mime  => $media_mime,
-                media_name  => $media_name,
-                media_size  => $media_size,
-                media_data  => $media_data,
-                media_mtime => $media_mtime,
-                media_ext   => $media_ext,
-                media_path  => $media_path,
-            },
-            sub{my $json = shift;$client->reform_hash($json,1);$c->safe_render(json=>$json) if defined $c}
+        $c->inactivity_timeout(120);
+        $client->upload_media({map {/media_/?($_=>$p->{$_}):()} keys %$p },
+            sub{my $json = shift;$c->safe_render(json=>$json) if defined $c}
         );
         
     };
-    any '/*whatever'  => sub{whatever=>'',$_[0]->safe_render(text=>"api not found",status=>403)};
+    any '/*'  => sub{$_[0]->safe_render(text=>"api not found",status=>403)};
     package Mojo::Weixin::Plugin::Openwx;
+    no utf8;
     $server = Mojo::Weixin::Server->new();   
     $server->app($server->build_app("Mojo::Weixin::Plugin::Openwx::App"));
     $server->app->secrets("hello world");
     $server->app->log($client->log);
-    if(ref $data eq "ARRAY"){#旧版本兼容性
-        $server->listen([ map { 'http://' . (defined $_->{host}?$_->{host}:"0.0.0.0") .":" . (defined $_->{port}?$_->{port}:5000)} @$data]);
+    my @listen;
+    if(ref $data eq "HASH" and ref $data->{listen} eq "ARRAY"){
+        for my $listen (@{$data->{listen}}) {
+            if($listen->{tls}){
+                my $listen_url = 'https://' . ($listen->{host} // "0.0.0.0") . ":" . ($listen->{port}//443);
+                my @ssl_option;
+                for(keys %$listen){
+                    next if ($_ eq 'tls' or $_ eq 'host' or $_ eq 'port');
+                    my $key = $_;
+                    my $val = $listen->{val};
+                    $key=~s/^tls_//g;
+                    push @ssl_option,"$_=$listen->{$_}";
+                }
+                $listen_url .= "?" . join("&",@ssl_option) if @ssl_option;
+                push @listen,$listen_url;
+            }
+            else{
+                push @listen,'http://' . ($listen->{host} // "0.0.0.0") . ":" . ($listen->{port}//3000) ;
+            }
+        }   
     }
-    elsif(ref $data eq "HASH" and ref $data->{listen} eq "ARRAY"){
-        $server->listen([ map { 'http://' . (defined $_->{host}?$_->{host}:"0.0.0.0") .":" . (defined $_->{port}?$_->{port}:5000)} @{ $data->{listen}} ]) ;
-    }
+    else{ @listen = ( 'http://0.0.0.0:3000' ); }
+    $server->listen(\@listen) ;
+    $client->info("插件[Mojo::Weixin::Plugin::Openwx]监听地址: [ " . join(", ",@listen) . " ]");
     $server->start;
 }
 1;
